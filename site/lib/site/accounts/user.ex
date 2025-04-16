@@ -4,11 +4,14 @@ defmodule Site.Accounts.User do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "users" do
-    field :email, :string
-    field :password, :string, virtual: true, redact: true
-    field :hashed_password, :string, redact: true
-    field :current_password, :string, virtual: true, redact: true
-    field :confirmed_at, :utc_datetime
+    field(:email, :string)
+    field(:password, :string, virtual: true, redact: true)
+    field(:hashed_password, :string, redact: true)
+    field(:current_password, :string, virtual: true, redact: true)
+    field(:confirmed_at, :utc_datetime)
+
+    # O campo basket agora armazena uma lista de mapas com id e quantidade
+    field(:basket, {:array, :map}, default: [])
 
     timestamps(type: :utc_datetime)
   end
@@ -36,6 +39,7 @@ defmodule Site.Accounts.User do
       submitting the form), this option can be set to `false`.
       Defaults to `true`.
   """
+
   def registration_changeset(user, attrs, opts \\ []) do
     user
     |> cast(attrs, [:email, :password])
@@ -158,5 +162,70 @@ defmodule Site.Accounts.User do
     else
       add_error(changeset, :current_password, "is not valid")
     end
+  end
+
+  @doc """
+  A user changeset for updating the basket.
+  """
+  def basket_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:basket])
+    |> validate_basket()
+  end
+
+  defp validate_basket(changeset) do
+    # Validações para garantir que cada item no basket tenha id e quantidade válidos
+    validate_change(changeset, :basket, fn :basket, basket ->
+      Enum.reduce_while(basket, [], fn item, acc ->
+        cond do
+          !Map.has_key?(item, "id") || !is_binary(item["id"]) ->
+            {:halt, [{:basket, "Each item must have a valid id"} | acc]}
+
+          !Map.has_key?(item, "quantity") || !is_integer(item["quantity"]) || item["quantity"] < 1 ->
+            {:halt, [{:basket, "Each item must have a valid quantity"} | acc]}
+
+          true ->
+            {:cont, acc}
+        end
+      end)
+    end)
+  end
+
+  @doc """
+  Adiciona um produto ao basket do usuário.
+  """
+  def add_to_basket(user, product_id, quantity) when quantity > 0 do
+    if Site.Products.product_exists?(product_id) do
+      new_item = %{"id" => product_id, "quantity" => quantity}
+
+      updated_basket =
+        user.basket
+        # Remove o produto se já existir
+        |> Enum.reject(&(&1["id"] == product_id))
+        # Adiciona o novo item
+        |> Kernel.++([new_item])
+
+      change(user, basket: updated_basket)
+    else
+      {:error, "Produto não encontrado"}
+    end
+  end
+
+  @doc """
+  Remove um produto do basket do usuário.
+  """
+  def remove_from_basket(user, product_id) do
+    updated_basket = Enum.reject(user.basket, &(&1["id"] == product_id))
+    change(user, basket: updated_basket)
+  end
+
+  @doc """
+  Lista os produtos no basket do usuário com detalhes.
+  """
+  def list_basket(user) do
+    Enum.map(user.basket, fn item ->
+      product = Site.Products.get_product(item["id"])
+      Map.put(product, "quantity", item["quantity"])
+    end)
   end
 end
